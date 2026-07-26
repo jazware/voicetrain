@@ -11,15 +11,21 @@
 set -euo pipefail
 
 DATA_DIR="${VOICETRAIN_DATA_DIR:-$HOME/voice-training}"
-SHARE_URL="smb://10.0.6.4/storage"
-MOUNT_POINT="/Volumes/storage"
-DEST="$MOUNT_POINT/Backup/voicetrain"
+# Both exported by the justfile; `just backup` is the intended entry.
+DEST="${VOICETRAIN_BACKUP_DIR:?VOICETRAIN_BACKUP_DIR is not set (run via 'just backup')}"
+SHARE_URL="${VOICETRAIN_BACKUP_SHARE:-}"
+# The volume root for the mount check, e.g. /Volumes/storage.
+MOUNT_POINT="$(echo "$DEST" | cut -d/ -f1-3)"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
 # Mount the share if needed. `mount volume` goes through Finder, which
 # reuses the login saved in the keychain from a previous manual mount.
 if ! mount | grep -q " on $MOUNT_POINT "; then
+  if [ -z "$SHARE_URL" ]; then
+    log "ERROR: $MOUNT_POINT not mounted and VOICETRAIN_BACKUP_SHARE unset"
+    exit 1
+  fi
   log "mounting $SHARE_URL"
   osascript -e "mount volume \"$SHARE_URL\"" >/dev/null
   for _ in $(seq 1 10); do
