@@ -1,0 +1,33 @@
+@import '@fontsource-variable/fraunces';
+@import '@fontsource-variable/nunito';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-cream text-ink font-body antialiased;
+  }
+
+  body {
+    /* Sunrise wash: peach and lavender glows melting into cream. */
+    background:
+      radial-gradient(60rem 32rem at 12% -8%, rgba(255, 232, 214, 0.9), transparent 60%),
+      radial-gradient(50rem 28rem at 88% -12%, rgba(230, 223, 245, 0.8), transparent 55%),
+      radial-gradient(40rem 24rem at 55% -10%, rgba(251, 213, 208, 0.7), transparent 50%),
+      #fdf6ee;
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+
+  ::selection {
+    @apply bg-rose-soft text-ink;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}

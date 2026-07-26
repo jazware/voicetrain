@@ -1,0 +1,7 @@
+.DS_Store
+node_modules/
+bin/
+
+# Analysis sidecar
+analysis/.venv/
+analysis/__pycache__/
