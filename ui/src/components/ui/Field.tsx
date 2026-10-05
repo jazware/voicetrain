@@ -3,7 +3,7 @@ import { clsx } from 'clsx'
 
 const inputStyles =
   'w-full rounded-2xl border border-rose-soft bg-white px-4 py-2.5 text-ink placeholder:text-ink-faint ' +
-  'focus:outline-none focus:ring-2 focus:ring-rose/40 focus:border-rose transition-shadow'
+  'focus:outline-hidden focus:ring-2 focus:ring-rose/40 focus:border-rose transition-shadow'
 
 export function Label({ children, htmlFor }: { children: React.ReactNode; htmlFor?: string }) {
   return (

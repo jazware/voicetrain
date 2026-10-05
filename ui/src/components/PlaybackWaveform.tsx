@@ -117,7 +117,7 @@ export function PlaybackWaveform({
           onClick={() => wavesurferRef.current?.playPause()}
           disabled={!ready}
           aria-label={playing ? 'Pause' : 'Play'}
-          className="!h-12 !w-12 !rounded-full !p-0"
+          className="h-12! w-12! rounded-full! p-0!"
         >
           {playing ? <Pause size={18} /> : <Play size={18} className="ml-0.5" />}
         </Button>

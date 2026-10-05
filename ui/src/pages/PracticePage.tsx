@@ -33,8 +33,10 @@ export function PracticePage() {
         recording && 'pb-56',
       )}
     >
-      {/* First in DOM so the recorder leads on mobile; right column on lg. */}
-      <aside className="space-y-4 lg:order-2 lg:pt-14">
+      {/* First in DOM so the recorder leads on mobile; right column on lg.
+          Top margins rather than space-y: the docked recording bar is out of
+          flow, and a bottom margin on it would lift it off the viewport edge. */}
+      <aside className="lg:order-2 lg:pt-14 [&>:not(:first-child)]:mt-4">
         <Recorder
           scriptId={scriptId}
           passage={script.body}

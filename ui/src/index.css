@@ -1,9 +1,95 @@
-@import '@fontsource-variable/fraunces';
-@import '@fontsource-variable/nunito';
+@import '@fontsource-variable/fraunces' layer(base);
+@import '@fontsource-variable/nunito' layer(base);
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+@theme {
+  --color-cream: #fdf6ee;
+  --color-card: #fffdfa;
+
+  --color-ink: #52404f;
+  --color-ink-soft: #8a7385;
+  --color-ink-faint: #b5a3b1;
+
+  --color-rose: #e2687a;
+  --color-rose-deep: #c94f62;
+  --color-rose-soft: #f9e0e4;
+  --color-rose-whisper: #fdf0f2;
+
+  --color-peach: #f5a97f;
+  --color-peach-soft: #ffe8d6;
+
+  --color-lavender: #a48fcb;
+  --color-lavender-soft: #e6dff5;
+
+  --color-sage: #7fa97f;
+  --color-sage-soft: #e4efe0;
+
+  --color-honey: #e0a458;
+  --color-honey-soft: #faedd8;
+
+  --font-display: 'Fraunces Variable', Georgia, serif;
+  --font-body: 'Nunito Variable', ui-rounded, sans-serif;
+
+  --shadow-cozy:
+    0 4px 24px -6px rgba(201, 79, 98, 0.14),
+    0 2px 8px -4px rgba(82, 64, 79, 0.08);
+  --shadow-cozy-lg:
+    0 12px 40px -8px rgba(201, 79, 98, 0.18),
+    0 4px 12px -4px rgba(82, 64, 79, 0.1);
+  --shadow-lifted: 0 2px 6px -2px rgba(82, 64, 79, 0.12);
+
+  --radius-cozy: 1.25rem;
+
+  --animate-fade-up: fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-gentle-pulse: gentle-pulse 2.4s ease-in-out infinite;
+  --animate-breathe: breathe 3s ease-in-out infinite;
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes gentle-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.55;
+    }
+  }
+  @keyframes breathe {
+    0%,
+    100% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.06);
+    }
+  }
+}
+
+@layer base {
+  /* v3 defaults this design was drawn with: gray-200 borders, pointer buttons. */
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: #e5e7eb;
+  }
+
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+}
 
 @layer base {
   html {
@@ -23,11 +109,5 @@
 
   ::selection {
     @apply bg-rose-soft text-ink;
-  }
-}
-
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
   }
 }

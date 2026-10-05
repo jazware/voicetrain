@@ -357,7 +357,7 @@ export function Recorder({
                 onBlur={saveNotes}
                 placeholder="Any thoughts about this one? (optional)"
                 rows={2}
-                className="w-full rounded-2xl border border-rose-soft bg-white px-3.5 py-2 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-rose/40"
+                className="w-full rounded-2xl border border-rose-soft bg-white px-3.5 py-2 text-sm text-ink placeholder:text-ink-faint focus:outline-hidden focus:ring-2 focus:ring-rose/40"
               />
             </div>
 
