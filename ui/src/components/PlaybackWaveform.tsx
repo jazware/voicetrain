@@ -95,7 +95,7 @@ export function PlaybackWaveform({
     if (!ws || !ready) return
     const regions = ws
       .getActivePlugins()
-      .find((p): p is RegionsPlugin => p instanceof RegionsPlugin)
+      .find((p): p is InstanceType<typeof RegionsPlugin> => p instanceof RegionsPlugin)
     if (!regions) return
     regions.clearRegions()
     for (const a of annotations) {
