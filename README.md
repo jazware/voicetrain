@@ -24,9 +24,9 @@ just dev       # Go backend on :8100 (debug logging)
 just ui-dev    # Vite dev server on :3002, proxies /api to :8100
 ```
 
-**Use it via http://localhost only** — browsers require a secure
-context for microphone access, and localhost qualifies; visiting from
-another device by LAN IP will silently fail to record.
+Use it via http://localhost only. Browsers need a secure context for
+microphone access, and localhost counts as one. Visiting from another
+device by LAN IP fails to record without an error.
 
 ## Configuration
 
@@ -59,23 +59,24 @@ card: a click-to-listen pitch contour, per-axis tiles with coaching
 notes, and the events as colored click-to-play regions on the
 playback waveform.
 
-New uploads are analyzed automatically; on startup the server
+New uploads are analyzed automatically. On startup the server
 backfills any takes that are missing analysis or carry an older
 analyzer version (bump `ANALYSIS_VERSION` in `analysis/analyze.py`
-and `analysis.Version` in Go together to force re-analysis).
-`POST /api/recordings/:id/analyze` re-queues one take. If docker or
-the image is missing the app runs fine — analysis is just skipped.
-Everything stays on-machine.
+and `analysis.Version` in `pkg/analysis` together to force
+re-analysis). `POST /api/recordings/:id/analyze` re-queues one take.
+If docker or the image is missing, the app runs fine and skips
+analysis. Everything stays on-machine.
 
 ## Backups
 
-With `--backup-dir` set (the justfile exports point it at a NAS
-mount), the **server backs itself up**:
-30s after startup and hourly after that, it copies any missing/changed
-WAVs and a WAL-consistent `VACUUM INTO` snapshot of the database.
-Nothing is ever deleted from the backup — takes deleted in the app
-survive on the NAS. If the share isn't mounted, it asks Finder to
-mount `--backup-share` using the login saved in the keychain.
+Backups are off until you set `--backup-dir`, for example to a NAS
+mount (the justfile has commented-out exports for
+`VOICETRAIN_BACKUP_DIR` and `VOICETRAIN_BACKUP_SHARE`). Then the server
+backs itself up 30s after startup and hourly after that. It copies any
+missing or changed WAVs and a WAL-consistent `VACUUM INTO` snapshot of
+the database. Nothing is ever deleted from the backup, so takes deleted
+in the app survive there. If the share isn't mounted, the server asks
+Finder to mount `--backup-share` using the login saved in the keychain.
 
 Backups live in the server (not launchd/cron) on purpose: new
 recordings only exist while the server runs, and macOS TCC denies
@@ -91,20 +92,21 @@ the same sync by hand for server-down verification.
 └── recordings/YYYY/MM/<id>.wav
 ```
 
-WAV masters run ~5.8 MB per minute. Recordings are uncompressed on
-purpose: they're the ideal input for the planned automated analysis
-(pitch/resonance annotations anchored to points in a take — the
-`annotations` table and API already exist, read-only for now).
+WAV masters run ~5.8 MB per minute. Recordings are uncompressed so
+the acoustic analysis gets the full signal. Its time-anchored events
+are `annotations` rows, which the API serves read-only
+(`GET /api/recordings/:id/annotations`).
 
-Mic capture disables echo cancellation, noise suppression, and auto
-gain — those "helpers" distort exactly what voice training needs to
-hear. Recording quality is therefore honest, including vocal fry.
+Mic capture turns off echo cancellation, noise suppression and auto
+gain, since they distort what voice training needs to hear. So the
+recording is honest, vocal fry included.
 
 ## Notes
 
-- Seed passages are placeholders right now ("We like to party") —
-  replace the text in `pkg/store/seeds/*.txt` (delivered via
-  idempotent seeding; edits you make in the UI stick).
+- The app seeds two passages from `pkg/store/seeds/*.txt`: the
+  Rainbow Passage, and "The North Wind and the Sun", which is still a
+  placeholder ("We like to party"). Seeding is idempotent, so edits you
+  make in the UI stick.
 - Schema migrations: plain SQL files in `pkg/store/migrations/`,
   applied by filename order via `PRAGMA user_version`.
-- `just test` runs Go tests; the frontend typechecks during `ui-build`.
+- `just test` runs the Go tests, and the frontend typechecks during `ui-build`.

@@ -1,4 +1,5 @@
-# Jaz's NAS; the server backs itself up here (hourly, only when new).
+# Backup destination: the server backs itself up here hourly, when there's
+# something new (`--backup-dir`, `--backup-share`).
 # export VOICETRAIN_BACKUP_DIR := "/Volumes/your-nas/Backup/voicetrain"
 # export VOICETRAIN_BACKUP_SHARE := "smb://your-nas/share"
 
