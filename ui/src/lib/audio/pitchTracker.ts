@@ -1,176 +1,98 @@
-import { PitchDetector } from 'pitchy'
+import { OneEuro, YinTracker, type PitchFrame } from './yin.ts'
+
+export type { PitchFrame }
 
 /**
- * Streaming pitch tracker: feed PCM chunks, poll estimates.
- *
- * McLeod Pitch Method over a 2048-sample sliding window (~43ms at
- * 48kHz). Tuned for real, un-AGC'd microphone speech:
- *
- * - voicing decided by MPM clarity, not level: quiet mics are normal
- *   when auto-gain is disabled, and clarity separates quiet periodic
- *   voice from loud aperiodic noise better than any RMS threshold
- * - moderate clarity gate — 0.9 only passes pure tones
- * - median filter that resets after silence so stale values don't
- *   drag the pitch when speech resumes
- * - octave-jump rejection: a sudden >6-semitone leap must persist for
- *   two frames before it's believed
- * - EMA-smoothed, briefly-held display value so the readout reads
- *   calm while the raw trace stays honest
+ * Live pitch for the practice screen: YIN frames for the trace, a
+ * calm readout for the big number, and the take's summary stats.
  */
 
-const WINDOW_SIZE = 2048
-const MIN_HZ = 75
-const MAX_HZ = 500
-// Schmitt trigger on clarity: starting voicing takes solid evidence,
-// but once voiced we keep tracking through weaker stretches — real
-// reading voice through a laptop mic dips constantly, and a single
-// threshold makes the meter drop out mid-vowel.
-const CLARITY_START = 0.75
-const CLARITY_CONTINUE = 0.65
-const CONTINUE_WINDOW_S = 0.25
-// Only guards true silence; voicing itself is decided by clarity.
-const SILENCE_RMS = 0.001
-const MEDIAN_WINDOW = 5
-const MEDIAN_RESET_S = 0.3
-const JUMP_LOG2 = 0.5 // ~6 semitones
-const DISPLAY_HOLD_S = 0.35
-const DISPLAY_EMA_ALPHA = 0.35
+// The readout is a One-Euro filter in log-pitch, then a deadband:
+// speech glides ~10 semitones a second, so a number that followed
+// every frame changed 35 times a second on Jaz's takes. Moves over a
+// semitone show at once; smaller ones (over a third of a semitone)
+// wait out READOUT_DWELL_S. That's ~10 changes a second in speech and
+// ~60 ms to follow a 5-semitone step.
+const READOUT_MIN_CUTOFF_HZ = 1.0
+const READOUT_BETA = 0.6
+const READOUT_JUMP_ST = 1
+const READOUT_NUDGE_ST = 1 / 3
+const READOUT_DWELL_S = 0.25
+// Short consonant gaps keep the last value instead of blanking.
+const READOUT_HOLD_S = 0.3
 
-export interface PitchSample {
-  /** Seconds since tracking started. */
-  time: number
-  /** Detected pitch in Hz, or null for unvoiced/silent frames. */
-  hz: number | null
-}
-
-export class PitchTracker {
-  private detector = PitchDetector.forFloat32Array(WINDOW_SIZE)
-  private window = new Float32Array(WINDOW_SIZE)
-  private filled = 0
-  private samplesSeen = 0
-  private samplesAtLastEstimate = -1
-  private lastSample: PitchSample = { time: 0, hz: null }
-
-  private recent: number[] = []
-  private lastVoicedAt = -Infinity
-  private pendingJump: number | null = null
-
-  private displayLog2: number | null = null
-  private displayAt = -Infinity
-
-  /** Decaying peak level, for detecting a too-quiet input device. */
+/** The calm readout and the take's summary, fed with frames from anywhere. */
+export class PitchReadout {
+  private readonly readout = new OneEuro(READOUT_MIN_CUTOFF_HZ, READOUT_BETA)
+  private readoutAt = -Infinity
+  private shown: number | null = null
+  private shownAt = -Infinity
+  private latest = 0
+  /** Every voiced trace value, kept for the take's summary. */
+  readonly voiced: number[] = []
+  /** Decaying peak level, for spotting a too-quiet input device. */
   peakRms = 0
 
-  private readonly sampleRate: number
-  /** All voiced estimates, kept for summary stats. */
-  readonly voiced: number[] = []
-
-  constructor(sampleRate: number) {
-    this.sampleRate = sampleRate
-  }
-
-  /** Append a PCM chunk to the sliding window. */
-  feed(chunk: Float32Array) {
-    this.samplesSeen += chunk.length
-    if (chunk.length >= WINDOW_SIZE) {
-      this.window.set(chunk.subarray(chunk.length - WINDOW_SIZE))
-      this.filled = WINDOW_SIZE
-      return
+  observe(f: PitchFrame) {
+    this.latest = f.center
+    this.peakRms = Math.max(this.peakRms * 0.995, f.rms)
+    if (f.hz === null) return
+    this.voiced.push(f.hz)
+    const log2 = Math.log2(f.hz)
+    if (f.center - this.readoutAt > READOUT_HOLD_S) {
+      this.readout.reset()
+      this.shown = null
     }
-    this.window.copyWithin(0, chunk.length)
-    this.window.set(chunk, WINDOW_SIZE - chunk.length)
-    this.filled = Math.min(WINDOW_SIZE, this.filled + chunk.length)
-  }
-
-  /** Current estimate for the trace; null when unvoiced. */
-  estimate(): PitchSample {
-    // No new audio since last time — return the cached result rather
-    // than re-detecting the identical window.
-    if (this.samplesSeen === this.samplesAtLastEstimate) return this.lastSample
-    this.samplesAtLastEstimate = this.samplesSeen
-
-    const time = this.samplesSeen / this.sampleRate
-    this.lastSample = { time, hz: this.detect(time) }
-    return this.lastSample
-  }
-
-  private detect(time: number): number | null {
-    if (this.filled < WINDOW_SIZE) return null
-
-    let sumSquares = 0
-    for (let i = 0; i < WINDOW_SIZE; i++) sumSquares += this.window[i] * this.window[i]
-    const rms = Math.sqrt(sumSquares / WINDOW_SIZE)
-    this.peakRms = Math.max(this.peakRms * 0.995, rms)
-    if (rms < SILENCE_RMS) return null
-
-    const [pitch, clarity] = this.detector.findPitch(this.window, this.sampleRate)
-    const voicedRecently = time - this.lastVoicedAt <= CONTINUE_WINDOW_S
-    const clarityBar = voicedRecently ? CLARITY_CONTINUE : CLARITY_START
-    if (clarity < clarityBar || pitch < MIN_HZ || pitch > MAX_HZ) return null
-
-    // Silence resets the median so stale pitch can't drag new speech.
-    if (time - this.lastVoicedAt > MEDIAN_RESET_S) {
-      this.recent.length = 0
-      this.pendingJump = null
+    const smooth = 2 ** this.readout.filter(log2, 0.01)
+    this.readoutAt = f.center
+    const st = this.shown === null ? Infinity : Math.abs(12 * Math.log2(smooth / this.shown))
+    const settled = f.center - this.shownAt >= READOUT_DWELL_S
+    if (st > READOUT_JUMP_ST || (settled && st > READOUT_NUDGE_ST)) {
+      this.shown = smooth
+      this.shownAt = f.center
     }
-
-    // A sudden octave-ish leap must occur twice in a row to be real;
-    // single-frame leaps are the classic MPM subharmonic blip.
-    const reference =
-      this.recent.length > 0 ? this.recent[this.recent.length - 1] : null
-    if (reference !== null && Math.abs(Math.log2(pitch / reference)) > JUMP_LOG2) {
-      if (
-        this.pendingJump !== null &&
-        Math.abs(Math.log2(pitch / this.pendingJump)) < 0.15
-      ) {
-        this.recent.length = 0 // the jump is real — follow it
-      } else {
-        this.pendingJump = pitch
-        return null
-      }
-    }
-    this.pendingJump = null
-
-    this.recent.push(pitch)
-    if (this.recent.length > MEDIAN_WINDOW) this.recent.shift()
-    const sorted = [...this.recent].sort((a, b) => a - b)
-    const median = sorted[Math.floor(sorted.length / 2)]
-
-    this.lastVoicedAt = time
-    this.voiced.push(median)
-
-    // Smooth the display value in log-pitch space.
-    const log2 = Math.log2(median)
-    this.displayLog2 =
-      this.displayLog2 === null || time - this.displayAt > DISPLAY_HOLD_S
-        ? log2
-        : this.displayLog2 + DISPLAY_EMA_ALPHA * (log2 - this.displayLog2)
-    this.displayAt = time
-
-    return median
   }
 
-  /**
-   * Smoothed, briefly-held pitch for the big readout: survives short
-   * consonant gaps so the number doesn't strobe.
-   */
+  /** The calm readout value, or null after a real pause. */
   displayHz(): number | null {
-    if (this.displayLog2 === null) return null
-    const time = this.samplesSeen / this.sampleRate
-    if (time - this.displayAt > DISPLAY_HOLD_S) return null
-    return 2 ** this.displayLog2
+    if (this.shown === null || this.latest - this.readoutAt > READOUT_HOLD_S) return null
+    return this.shown
   }
 
   /** Summary for pitch_stats, or undefined if nothing voiced was heard. */
   stats(targetMinHz: number, targetMaxHz: number) {
-    if (this.voiced.length === 0) return undefined
-    const sorted = [...this.voiced].sort((a, b) => a - b)
-    const inBand = this.voiced.filter((hz) => hz >= targetMinHz && hz <= targetMaxHz).length
-    return {
-      median_hz: Math.round(sorted[Math.floor(sorted.length / 2)] * 10) / 10,
-      pct_in_band: Math.round((inBand / this.voiced.length) * 1000) / 1000,
-      min_hz: Math.round(sorted[0] * 10) / 10,
-      max_hz: Math.round(sorted[sorted.length - 1] * 10) / 10,
-    }
+    return pitchStats(this.voiced, targetMinHz, targetMaxHz)
+  }
+}
+
+/** YIN tracking plus the readout, for feeding PCM directly (tests, tools). */
+export class PitchTracker extends PitchReadout {
+  private readonly yin: YinTracker
+
+  constructor(sampleRate: number) {
+    super()
+    this.yin = new YinTracker(sampleRate)
+  }
+
+  /** Feeds PCM; returns the 10 ms frames it completed. */
+  push(chunk: Float32Array): PitchFrame[] {
+    const frames = this.yin.push(chunk)
+    for (const f of frames) this.observe(f)
+    return frames
+  }
+}
+
+export function pitchStats(voiced: number[], targetMinHz: number, targetMaxHz: number) {
+  if (voiced.length === 0) return undefined
+  const sorted = [...voiced].sort((a, b) => a - b)
+  const inBand = voiced.filter((hz) => hz >= targetMinHz && hz <= targetMaxHz).length
+  const q = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))]
+  return {
+    median_hz: Math.round(q(0.5) * 10) / 10,
+    pct_in_band: Math.round((inBand / voiced.length) * 1000) / 1000,
+    // 5th/95th percentiles: a take's extremes are tracker edges, not
+    // the voice's range.
+    min_hz: Math.round(q(0.05) * 10) / 10,
+    max_hz: Math.round(q(0.95) * 10) / 10,
   }
 }

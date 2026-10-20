@@ -6,6 +6,10 @@ import { clsx } from 'clsx'
  * progress: read words soften, the next expected word glows gently.
  * highlightCount < 0 renders plain text (follow-along off).
  */
+// A reading measure of ~65 characters, sized for reading aloud from
+// arm's length.
+const PASSAGE = 'max-w-[65ch] whitespace-pre-wrap font-body text-[1.15rem] leading-[1.9] sm:text-[1.25rem]'
+
 export function PassageText({
   body,
   highlightCount = -1,
@@ -16,12 +20,12 @@ export function PassageText({
   const segments = useMemo(() => body.split(/(\s+)/), [body])
 
   if (highlightCount < 0) {
-    return <p className="whitespace-pre-wrap font-body text-lg leading-loose text-ink">{body}</p>
+    return <p className={clsx(PASSAGE, 'text-ink')}>{body}</p>
   }
 
   let wordIndex = 0
   return (
-    <p className="whitespace-pre-wrap font-body text-lg leading-loose">
+    <p className={PASSAGE}>
       {segments.map((segment, i) => {
         if (/^\s*$/.test(segment)) return <Fragment key={i}>{segment}</Fragment>
         const idx = wordIndex++

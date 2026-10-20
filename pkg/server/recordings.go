@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/jazware/voicetrain/pkg/metrics"
 	"github.com/jazware/voicetrain/pkg/store"
 	"github.com/jazware/voicetrain/pkg/wav"
 	"github.com/labstack/echo/v4"
@@ -59,8 +62,15 @@ func (s *Server) handleUploadRecording(c echo.Context) error {
 		return mapStoreErr(err)
 	}
 
-	// recordings/YYYY/MM/<id>.wav, bucketed by the user's local day.
-	relPath := filepath.Join("recordings", localDay[0:4], localDay[5:7], fmt.Sprintf("%d.wav", id))
+	// recordings/YYYY/MM/<id>-<random>.wav, bucketed by the user's local
+	// day. SQLite reuses the highest id after a delete, so the id alone
+	// isn't unique over time: a backup holding the deleted take's
+	// <id>.wav would pair it with the new row on a restore.
+	suffix, err := randomHex(4)
+	if err != nil {
+		return err
+	}
+	relPath := filepath.Join("recordings", localDay[0:4], localDay[5:7], fmt.Sprintf("%d-%s.wav", id, suffix))
 	absPath := filepath.Join(s.dataDir, relPath)
 	if err := s.writeRecordingFile(absPath, file); err != nil {
 		if delErr := s.store.DeleteRecording(id); delErr != nil {
@@ -72,6 +82,8 @@ func (s *Server) handleUploadRecording(c echo.Context) error {
 		return err
 	}
 	s.analyzer.Enqueue(id)
+	metrics.TakesSaved.Inc()
+	metrics.TakeSeconds.Observe(float64(info.DurationMs) / 1000)
 
 	recording, err := s.store.GetRecording(id)
 	if err != nil {
@@ -80,7 +92,6 @@ func (s *Server) handleUploadRecording(c echo.Context) error {
 	return c.JSON(http.StatusCreated, recording)
 }
 
-// handleAnalyzeRecording queues a (re-)analysis of one take.
 func (s *Server) handleAnalyzeRecording(c echo.Context) error {
 	id, err := pathID(c)
 	if err != nil {
@@ -95,26 +106,46 @@ func (s *Server) handleAnalyzeRecording(c echo.Context) error {
 	}
 	if s.analyzer == nil {
 		return echo.NewHTTPError(http.StatusServiceUnavailable,
-			"analysis unavailable — is docker running and the voicetrain-analysis image built?")
+			"analysis is off: the server found no analyzer when it started")
 	}
 	s.analyzer.Enqueue(id)
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "queued"})
 }
 
+// writeRecordingFile writes the take under a temporary name, syncs it and
+// renames it into place, so nothing (the backup above all) ever sees a
+// half-written WAV under the take's real name.
 func (s *Server) writeRecordingFile(absPath string, src io.Reader) error {
 	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
 		return err
 	}
-	dst, err := os.Create(absPath)
+	tmp := absPath + ".partial"
+	dst, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(dst, src); err != nil {
-		dst.Close()
-		os.Remove(absPath)
-		return err
+	_, err = io.Copy(dst, src)
+	if err == nil {
+		err = dst.Sync()
 	}
-	return dst.Close()
+	if cerr := dst.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, absPath)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
+}
+
+func randomHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func (s *Server) handleListRecordings(c echo.Context) error {
@@ -244,4 +275,38 @@ func (s *Server) handleListAnnotations(c echo.Context) error {
 		return err
 	}
 	return c.JSON(http.StatusOK, annotations)
+}
+
+func (s *Server) handleAnalysisStatus(c echo.Context) error {
+	return c.JSON(http.StatusOK, s.analyzer.Status())
+}
+
+func (s *Server) handleListAnalysisHistory(c echo.Context) error {
+	id, err := pathID(c)
+	if err != nil {
+		return err
+	}
+	if _, err := s.store.GetRecording(id); err != nil {
+		return mapStoreErr(err)
+	}
+	history, err := s.store.ListAnalysisHistory(id)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, history)
+}
+
+func (s *Server) handleRetryFailedAnalyses(c echo.Context) error {
+	if s.analyzer == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable,
+			"analysis is off: the server found no analyzer when it started")
+	}
+	ids, err := s.store.ListRecordingIDsWithAnalysisErrors()
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		s.analyzer.Enqueue(id)
+	}
+	return c.JSON(http.StatusAccepted, map[string]int{"queued": len(ids)})
 }

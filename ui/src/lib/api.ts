@@ -5,6 +5,8 @@ export interface Script {
   attribution: string
   focus_points: string[]
   is_seeded: boolean
+  /** "passage", or an exercise: "siren", "sustain", "hold". */
+  kind: string
   created_at: number
   updated_at: number
   deleted_at?: number
@@ -24,6 +26,13 @@ export interface PitchStats {
   pct_in_band: number
   min_hz?: number
   max_hz?: number
+  // Exercise takes also carry their measures (lib/exercises.ts).
+  range_st?: number
+  low_hz?: number
+  high_hz?: number
+  longest_hold_s?: number
+  hold_sd_cents?: number | null
+  longest_in_band_s?: number
 }
 
 /** One take's post-hoc acoustic analysis (see analysis/analyze.py). */
@@ -92,11 +101,15 @@ export interface Recording {
   pitch_stats?: PitchStats
   analysis?: Analysis
   analyzed_at?: number
+  /** Why the last analysis attempt failed, if it did. */
+  analysis_error?: string
+  analysis_error_at?: number
   recorded_at: number
   local_day: string
   created_at: number
   updated_at: number
   script_title?: string
+  script_kind?: string
 }
 
 export interface Annotation {
@@ -114,6 +127,66 @@ export interface HeatmapDay {
   day: string
   count: number
   total_duration_ms: number
+}
+
+/** One take's headline numbers for the progress chart. */
+export interface TrendPoint {
+  id: number
+  script_id: number
+  recorded_at: number
+  local_day: string
+  duration_ms: number
+  median_hz: number | null
+  /** Percent (0-100), from the post-hoc analysis. */
+  pct_in_band: number | null
+  fry_pct: number | null
+  vtl_cm: number | null
+  semitone_sd: number | null
+  live_median_hz: number | null
+  kind: string
+  range_st: number | null
+  hold_s: number | null
+  hold_cents: number | null
+  streak_s: number | null
+}
+
+export interface AnalysisStatus {
+  enabled: boolean
+  backend?: string
+  /** The analyzer version this server expects. */
+  version: number
+  /** The version the installed analyzer reports (0 = too old to say). */
+  image_version: number
+  workers: number
+  queued: number
+  running: number
+  analyzed: number
+  /** Takes whose last analysis failed (drops when a retry works). */
+  failed_takes: number
+  last_error?: string
+  /** Takes queued since the analyzer was last idle, for progress. */
+  backfill_total: number
+}
+
+export interface BackupStatus {
+  enabled: boolean
+  dir?: string
+  interval_s?: number
+  last_attempt_at?: number
+  last_success_at?: number
+  last_error?: string
+  /** Takes in the data dir at the last successful run. */
+  recordings: number
+  snapshots: number
+  /** Takes the last run skipped: their files don't match their rows. */
+  bad_takes?: number[]
+}
+
+export interface ArchivedAnalysis {
+  version: number
+  analysis: Analysis
+  analyzed_at?: number
+  replaced_at: number
 }
 
 export interface Settings {
@@ -191,6 +264,16 @@ export const api = {
     const qs = params.toString()
     return request<HeatmapDay[]>(`/api/history/heatmap${qs ? `?${qs}` : ''}`)
   },
+
+  trends: (opts: { script_id?: number } = {}) =>
+    request<TrendPoint[]>(
+      `/api/history/trends${opts.script_id !== undefined ? `?script_id=${opts.script_id}` : ''}`,
+    ),
+
+  analysisStatus: () => request<AnalysisStatus>('/api/analysis/status'),
+  retryFailedAnalyses: () => request<{ queued: number }>('/api/analysis/retry-failed', { method: 'POST' }),
+  backupStatus: () => request<BackupStatus>('/api/backup/status'),
+  analysisHistory: (id: number) => request<ArchivedAnalysis[]>(`/api/recordings/${id}/analyses`),
 
   getSettings: () => request<Settings>('/api/settings'),
   putSettings: (settings: Settings) => request<Settings>('/api/settings', json('PUT', settings)),

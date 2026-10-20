@@ -23,7 +23,9 @@ import numpy as np
 import parselmouth
 from parselmouth.praat import call
 
-ANALYSIS_VERSION = 1
+# 2: spectral, HNR and CPPS measured on voiced speech only; fry share
+#    over in-phrase frames only.
+ANALYSIS_VERSION = 2
 
 TIME_STEP = 0.01
 PITCH_FLOOR = 60.0  # low enough to see fry
@@ -51,6 +53,12 @@ MIN_SOUNDING_S = 0.1
 # Syllable nuclei (de Jong & Wempe style): an intensity peak counts as
 # a nucleus if it is voiced and rises >= 2 dB above the preceding dip.
 NUCLEUS_DIP_DB = 2.0
+
+# Voiced speech for spectral/weight measures: runs of voiced in-phrase
+# frames, bridging gaps under 30 ms, dropping runs under 50 ms.
+VOICED_MERGE_GAP_S = 0.03
+VOICED_MIN_RUN_S = 0.05
+MIN_VOICED_SPEECH_S = 0.5
 
 MAX_EVENTS = 60
 CONTOUR_STEP_S = 0.25
@@ -196,6 +204,34 @@ def count_syllable_nuclei(intensity, voiced, phrases):
     return count
 
 
+def in_phrases(times, phrases):
+    mask = np.zeros(len(times), dtype=bool)
+    for t0, t1 in phrases:
+        mask |= (times >= t0) & (times <= t1)
+    return mask
+
+
+def voiced_speech(snd, freqs, times, phrases):
+    """The take's voiced speech, concatenated, or None if there's too little.
+
+    Whole-take spectra, HNR and CPPS also measure the pauses, lead-in
+    and room noise: on Jaz's 154 takes, whole-take CPPS correlated
+    +0.50 and HNR +0.67 with how much of the take was voiced, so a
+    take with longer pauses read as "breathier". Measuring only voiced
+    frames inside phrases removes that confound.
+    """
+    mask = (freqs > 0) & in_phrases(times, phrases)
+    runs = runs_from_mask(mask, times, VOICED_MERGE_GAP_S, VOICED_MIN_RUN_S)
+    if sum(t1 - t0 for t0, t1 in runs) < MIN_VOICED_SPEECH_S:
+        return None
+    half = TIME_STEP / 2
+    parts = [
+        snd.extract_part(max(0.0, t0 - half), min(snd.duration, t1 + half), preserve_times=False)
+        for t0, t1 in runs
+    ]
+    return parselmouth.Sound.concatenate(parts, overlap=0.004)
+
+
 def analyze_pitch(freqs, times, target_min, target_max, phrases):
     voiced = freqs > 0
     hz = freqs[voiced]
@@ -233,6 +269,12 @@ def analyze_pitch(freqs, times, target_min, target_max, phrases):
             }
         )
 
+    # Fry share over voiced frames inside phrases: low periodicity in a
+    # pause is mains hum or breath (60 Hz hum showed up in 23% of the
+    # "fry" frames on Jaz's takes), not a creaky voice.
+    speaking = voiced & in_phrases(times, phrases)
+    fry_pct = np.mean(fry_mask[speaking]) * 100 if np.any(speaking) else None
+
     return {
         "voiced_pct": num(np.mean(voiced) * 100),
         "median_hz": num(np.median(hz)),
@@ -240,7 +282,7 @@ def analyze_pitch(freqs, times, target_min, target_max, phrases):
         "p10_hz": num(np.percentile(hz, 10)),
         "p90_hz": num(np.percentile(hz, 90)),
         "pct_in_band": num(in_band * 100),
-        "fry_pct": num(np.mean(fry_mask[voiced]) * 100),
+        "fry_pct": num(fry_pct),
     }, events
 
 
@@ -299,7 +341,7 @@ def analyze_melody(freqs, times, phrases):
     }, events
 
 
-def analyze_resonance(snd, freqs, times):
+def analyze_resonance(snd, freqs, times, speech):
     voiced_times = times[freqs > 0]
     out = {
         "f1_median_hz": None,
@@ -331,8 +373,9 @@ def analyze_resonance(snd, freqs, times):
             num(medians[1]),
             num(medians[2]),
         )
-        # Uniform-tube estimate: Fi = (2i-1)c/4L. F3 dominates the
-        # average since higher formants track tract length best.
+        # Uniform-tube estimate: Fi = (2i-1)c/4L, solved per formant and
+        # averaged. Vowel-dependent, so only trends across takes of the
+        # same passage mean much.
         c = 35000.0  # cm/s
         vtls = [
             (2 * i + 1) * c / (4 * medians[i]) for i in range(3) if medians[i]
@@ -340,9 +383,11 @@ def analyze_resonance(snd, freqs, times):
         if vtls:
             out["estimated_vtl_cm"] = num(np.mean(vtls), 2)
 
-    spectrum = snd.to_spectrum()
+    if speech is None:
+        return out
+    spectrum = speech.to_spectrum()
     out["spectral_centroid_hz"] = num(call(spectrum, "Get centre of gravity", 2))
-    ltas = call(snd, "To Ltas", 100)
+    ltas = call(speech, "To Ltas", 100)
     low = call(ltas, "Get mean", 0, 1000, "energy")
     high = call(ltas, "Get mean", 1000, 4000, "energy")
     if not (math.isnan(low) or math.isnan(high)):
@@ -381,7 +426,7 @@ def analyze_breath(intensity, voiced, phrases, pauses, freqs, times):
     }, events
 
 
-def analyze_weight(snd):
+def analyze_weight(snd, speech):
     out = {
         "cpps_db": None,
         "hnr_db": None,
@@ -389,7 +434,21 @@ def analyze_weight(snd):
         "shimmer_local_pct": None,
     }
 
-    harmonicity = snd.to_harmonicity_cc(
+    # Jitter and shimmer come from the full take: the point process
+    # only marks periodic stretches anyway, and the joins between
+    # concatenated voiced runs would read as period perturbations.
+    point_process = call(snd, "To PointProcess (periodic, cc)", PITCH_FLOOR, PITCH_CEILING)
+    jitter = call(point_process, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3)
+    shimmer = call(
+        [snd, point_process], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6
+    )
+    out["jitter_local_pct"] = num(jitter * 100, 2)
+    out["shimmer_local_pct"] = num(shimmer * 100, 2)
+
+    if speech is None:
+        return out
+
+    harmonicity = speech.to_harmonicity_cc(
         time_step=TIME_STEP,
         minimum_pitch=75.0,
         silence_threshold=0.1,
@@ -400,7 +459,7 @@ def analyze_weight(snd):
         out["hnr_db"] = num(np.mean(voiced_frames))
 
     # CPPS with the standard clinical recipe (Maryn/Praat manual).
-    cepstrogram = call(snd, "To PowerCepstrogram", 60, 0.002, 5000, 50)
+    cepstrogram = call(speech, "To PowerCepstrogram", 60, 0.002, 5000, 50)
     cpps = call(
         cepstrogram,
         "Get CPPS",
@@ -408,14 +467,6 @@ def analyze_weight(snd):
         "Parabolic", 0.001, 0.05, "Straight", "Robust",
     )
     out["cpps_db"] = num(cpps, 2)
-
-    point_process = call(snd, "To PointProcess (periodic, cc)", PITCH_FLOOR, PITCH_CEILING)
-    jitter = call(point_process, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3)
-    shimmer = call(
-        [snd, point_process], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6
-    )
-    out["jitter_local_pct"] = num(jitter * 100, 2)
-    out["shimmer_local_pct"] = num(shimmer * 100, 2)
     return out
 
 
@@ -434,14 +485,8 @@ def pitch_contour(freqs, times):
     return contour
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("wav_path")
-    parser.add_argument("--target-min-hz", type=float, default=165.0)
-    parser.add_argument("--target-max-hz", type=float, default=220.0)
-    args = parser.parse_args()
-
-    snd = parselmouth.Sound(args.wav_path)
+def analyze(snd, target_min_hz=165.0, target_max_hz=220.0):
+    """The full analysis document for one parselmouth Sound."""
     if snd.n_channels > 1:
         snd = snd.convert_to_mono()
 
@@ -460,24 +505,25 @@ def main():
     phrases, pauses = detect_phrases(intensity)
 
     pitch_metrics, fry_events = analyze_pitch(
-        freqs, times, args.target_min_hz, args.target_max_hz, phrases
+        freqs, times, target_min_hz, target_max_hz, phrases
     )
     melody_metrics, melody_events = analyze_melody(freqs, times, phrases)
     breath_metrics, breath_events = analyze_breath(
         intensity, voiced, phrases, pauses, freqs, times
     )
-    resonance_metrics = analyze_resonance(snd, freqs, times)
-    weight_metrics = analyze_weight(snd)
+    speech = voiced_speech(snd, freqs, times, phrases)
+    resonance_metrics = analyze_resonance(snd, freqs, times, speech)
+    weight_metrics = analyze_weight(snd, speech)
 
     events = sorted(
         fry_events + melody_events + breath_events, key=lambda e: e["start_ms"]
     )[:MAX_EVENTS]
 
-    result = {
+    return {
         "version": ANALYSIS_VERSION,
         "duration_s": num(snd.duration, 2),
-        "target_min_hz": args.target_min_hz,
-        "target_max_hz": args.target_max_hz,
+        "target_min_hz": target_min_hz,
+        "target_max_hz": target_max_hz,
         "pitch": pitch_metrics,
         "melody": melody_metrics,
         "resonance": resonance_metrics,
@@ -486,8 +532,41 @@ def main():
         "contour": pitch_contour(freqs, times),
         "events": events,
     }
-    json.dump(result, sys.stdout, allow_nan=False)
-    print()
+
+
+def main():
+    if sys.argv[1:] == ["--version"]:
+        print(ANALYSIS_VERSION)
+        return
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("wav_paths", nargs="+")
+    parser.add_argument("--target-min-hz", type=float, default=165.0)
+    parser.add_argument("--target-max-hz", type=float, default=220.0)
+    parser.add_argument(
+        "--jsonl",
+        action="store_true",
+        help="one JSON line per file, tagged with its path; a failing file "
+        "yields {file, error} instead of stopping the batch",
+    )
+    args = parser.parse_args()
+
+    if not args.jsonl:
+        if len(args.wav_paths) != 1:
+            parser.error("several files need --jsonl")
+        doc = analyze(parselmouth.Sound(args.wav_paths[0]), args.target_min_hz, args.target_max_hz)
+        json.dump(doc, sys.stdout, allow_nan=False)
+        print()
+        return
+
+    # Batch mode: one process per batch amortizes the interpreter and
+    # Praat start-up (and, under docker, the container start).
+    for path in args.wav_paths:
+        try:
+            doc = analyze(parselmouth.Sound(path), args.target_min_hz, args.target_max_hz)
+            line = json.dumps({"file": path, **doc}, allow_nan=False)
+        except Exception as e:  # noqa: BLE001 - reported per file
+            line = json.dumps({"file": path, "error": f"{type(e).__name__}: {e}"[:500]})
+        print(line, flush=True)
 
 
 if __name__ == "__main__":

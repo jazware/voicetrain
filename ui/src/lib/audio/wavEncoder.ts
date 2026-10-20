@@ -1,7 +1,7 @@
 /**
- * Encode Float32 PCM chunks as a 16-bit mono PCM WAV blob.
+ * Encode Float32 PCM chunks as a 16-bit mono PCM WAV file.
  */
-export function encodeWav(chunks: Float32Array[], sampleRate: number): Blob {
+export function encodeWav(chunks: Float32Array[], sampleRate: number): ArrayBuffer {
   const totalSamples = chunks.reduce((sum, c) => sum + c.length, 0)
   const dataBytes = totalSamples * 2
   const buffer = new ArrayBuffer(44 + dataBytes)
@@ -33,5 +33,5 @@ export function encodeWav(chunks: Float32Array[], sampleRate: number): Blob {
       offset += 2
     }
   }
-  return new Blob([buffer], { type: 'audio/wav' })
+  return buffer
 }

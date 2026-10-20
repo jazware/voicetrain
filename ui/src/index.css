@@ -7,9 +7,11 @@
   --color-cream: #fdf6ee;
   --color-card: #fffdfa;
 
-  --color-ink: #52404f;
-  --color-ink-soft: #8a7385;
-  --color-ink-faint: #b5a3b1;
+  /* ink-soft passes 4.5:1 on cream for body text; ink-faint is for
+     hints and decoration (3:1). */
+  --color-ink: #4a3846;
+  --color-ink-soft: #76606f;
+  --color-ink-faint: #a08a9b;
 
   --color-rose: #e2687a;
   --color-rose-deep: #c94f62;
@@ -23,9 +25,11 @@
   --color-lavender-soft: #e6dff5;
 
   --color-sage: #7fa97f;
+  --color-sage-deep: #4f7f52;
   --color-sage-soft: #e4efe0;
 
   --color-honey: #e0a458;
+  --color-honey-deep: #a8681c;
   --color-honey-soft: #faedd8;
 
   --font-display: 'Fraunces Variable', Georgia, serif;
@@ -109,5 +113,20 @@
 
   ::selection {
     @apply bg-rose-soft text-ink;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-rose);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }

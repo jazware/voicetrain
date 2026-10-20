@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import { clsx } from 'clsx'
 import type { HeatmapDay } from '@/lib/api'
 import { localDay } from '@/lib/api'
@@ -76,11 +76,18 @@ export function Heatmap({
     return { cells, monthLabels, cols: col + 1 }
   }, [weeks])
 
+  // On narrow screens the calendar scrolls; start at the recent end.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollLeft = el.scrollWidth
+  }, [grid])
+
   const width = grid.cols * STEP + 28
   const height = 7 * STEP + 18
 
   return (
-    <div className="overflow-x-auto">
+    <div ref={scrollRef} className="overflow-x-auto">
       <svg
         width={width}
         height={height}
@@ -131,8 +138,22 @@ export function Heatmap({
               fill={colorFor(duration)}
               stroke={selected ? '#52404F' : 'none'}
               strokeWidth={selected ? 1.5 : 0}
-              className={clsx(onSelectDay && 'cursor-pointer')}
+              className={clsx(onSelectDay && 'cursor-pointer focus:outline-none focus-visible:stroke-rose focus-visible:[stroke-width:2]')}
               onClick={onSelectDay ? () => onSelectDay(day) : undefined}
+              {...(onSelectDay && duration > 0
+                ? {
+                    tabIndex: 0,
+                    role: 'button',
+                    'aria-label': title,
+                    'aria-pressed': selected,
+                    onKeyDown: (e: React.KeyboardEvent) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        onSelectDay(day)
+                      }
+                    },
+                  }
+                : {})}
             >
               <title>{title}</title>
             </rect>
@@ -140,12 +161,12 @@ export function Heatmap({
         })}
       </svg>
       <div className="mt-2 flex items-center justify-end gap-1.5 pr-1 text-xs text-ink-faint">
-        rest
+        less
         <span className="inline-block h-2.5 w-2.5 rounded-[3px]" style={{ background: EMPTY_COLOR }} />
         {RAMP.map((c) => (
           <span key={c} className="inline-block h-2.5 w-2.5 rounded-[3px]" style={{ background: c }} />
         ))}
-        glow
+        more
       </div>
     </div>
   )

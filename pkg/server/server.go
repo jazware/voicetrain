@@ -6,22 +6,31 @@ import (
 	"time"
 
 	"github.com/jazware/voicetrain/pkg/analysis"
+	"github.com/jazware/voicetrain/pkg/backup"
+	"github.com/jazware/voicetrain/pkg/metrics"
 	"github.com/jazware/voicetrain/pkg/store"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
 
-// Server holds handler dependencies.
+// Options are the deployment-specific parts of the server.
+type Options struct {
+	// Auth guards every route but /healthz; zero means none (localhost).
+	Auth Auth
+	// Backup is the backup runner, for its status (nil: backups off).
+	Backup *backup.Runner
+}
+
 type Server struct {
 	logger   *slog.Logger
 	store    *store.Store
 	dataDir  string
 	analyzer *analysis.Runner // nil when analysis is disabled
+	backup   *backup.Runner   // nil when backups are off
 }
 
-// New builds the Echo app with all routes registered.
-func New(logger *slog.Logger, st *store.Store, dataDir string, analyzer *analysis.Runner) *echo.Echo {
-	s := &Server{logger: logger, store: st, dataDir: dataDir, analyzer: analyzer}
+func New(logger *slog.Logger, st *store.Store, dataDir string, analyzer *analysis.Runner, opts Options) *echo.Echo {
+	s := &Server{logger: logger, store: st, dataDir: dataDir, analyzer: analyzer, backup: opts.Backup}
 
 	e := echo.New()
 	e.HideBanner = true
@@ -29,11 +38,26 @@ func New(logger *slog.Logger, st *store.Store, dataDir string, analyzer *analysi
 
 	e.Use(middleware.Recover())
 	e.Use(slogRequestLogger(logger))
-	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		// Vite dev server origin; the embedded UI is same-origin.
-		AllowOrigins: []string{"http://localhost:3002"},
-		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodPut, http.MethodDelete},
-	}))
+	// No page may frame voicetrain: a framed page under a decoy is how a
+	// click on "Delete this take" gets tricked out of Jaz.
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			h := c.Response().Header()
+			h.Set("Content-Security-Policy", "frame-ancestors 'none'")
+			h.Set("X-Frame-Options", "DENY")
+			return next(c)
+		}
+	})
+	e.Use(opts.Auth.middleware(
+		func(reason string) { metrics.Refused.WithLabelValues(reason).Inc() },
+	))
+	if !opts.Auth.Enabled() {
+		e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+			// Vite dev server origin; the embedded UI is same-origin.
+			AllowOrigins: []string{"http://localhost:3002"},
+			AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodPut, http.MethodDelete},
+		}))
+	}
 	e.Use(middleware.BodyLimit("256M"))
 
 	e.GET("/healthz", func(c echo.Context) error {
@@ -45,8 +69,6 @@ func New(logger *slog.Logger, st *store.Store, dataDir string, analyzer *analysi
 	return e
 }
 
-// registerRoutes wires the /api endpoints. Handlers live in their
-// resource-specific files (scripts.go, recordings.go, ...).
 func (s *Server) registerRoutes(e *echo.Echo) {
 	api := e.Group("/api")
 
@@ -66,6 +88,13 @@ func (s *Server) registerRoutes(e *echo.Echo) {
 	api.DELETE("/recordings/:id", s.handleDeleteRecording)
 
 	api.GET("/history/heatmap", s.handleHeatmap)
+	api.GET("/history/trends", s.handleTrends)
+
+	api.GET("/analysis/status", s.handleAnalysisStatus)
+	api.POST("/analysis/retry-failed", s.handleRetryFailedAnalyses)
+	api.GET("/recordings/:id/analyses", s.handleListAnalysisHistory)
+
+	api.GET("/backup/status", func(c echo.Context) error { return c.JSON(http.StatusOK, s.backup.Status()) })
 
 	api.GET("/settings", s.handleGetSettings)
 	api.PUT("/settings", s.handlePutSettings)

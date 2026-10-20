@@ -29,6 +29,18 @@ export function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
 
+/** "just now", "12 minutes ago", "3 hours ago", "Oct 12" for unix millis. */
+export function formatAgo(ms: number, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - ms) / 1000))
+  if (s < 60) return 'just now'
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m} ${m === 1 ? 'minute' : 'minutes'} ago`
+  const h = Math.round(m / 60)
+  if (h < 24) return `${h} ${h === 1 ? 'hour' : 'hours'} ago`
+  const d = new Date(ms)
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
 /** A warm little greeting for the home page. */
 export function greeting(): string {
   const hour = new Date().getHours()

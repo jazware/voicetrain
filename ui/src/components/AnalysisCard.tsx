@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { clsx } from 'clsx'
 import { RefreshCw } from 'lucide-react'
 import { api, type Analysis, type Recording } from '@/lib/api'
+import { useAnalysisStatus } from '@/hooks/queries'
 import { breathNote, melodyNote, pitchNote, resonanceNote, weightNote } from '@/lib/analysisMeta'
 import { Card } from '@/components/ui/Card'
 
@@ -19,11 +20,19 @@ export function AnalysisCard({
   onSeek: (seconds: number) => void
 }) {
   const qc = useQueryClient()
+  const { data: status } = useAnalysisStatus()
   const [requestedAt, setRequestedAt] = useState<number | null>(null)
 
+  const analyzedAt = take.analyzed_at ?? 0
+  const failedAt = take.analysis_error_at ?? 0
+  const failed =
+    take.analysis_error !== undefined && failedAt >= analyzedAt && (requestedAt === null || failedAt >= requestedAt)
+  const off = status !== undefined && !status.enabled
   const waiting =
-    (!take.analyzed_at && take.file_path !== '') ||
-    (requestedAt !== null && (take.analyzed_at ?? 0) < requestedAt)
+    !off &&
+    !failed &&
+    ((!take.analyzed_at && take.file_path !== '') ||
+      (requestedAt !== null && Math.max(analyzedAt, failedAt) < requestedAt))
 
   // While an analysis is due, poll the take; when a new one lands the
   // annotations (waveform regions) need refreshing too.
@@ -31,12 +40,11 @@ export function AnalysisCard({
     if (!waiting) return
     const timer = setInterval(
       () => qc.invalidateQueries({ queryKey: ['recordings', 'detail', take.id] }),
-      4000,
+      3000,
     )
     return () => clearInterval(timer)
   }, [waiting, qc, take.id])
 
-  const analyzedAt = take.analyzed_at
   useEffect(() => {
     if (analyzedAt) qc.invalidateQueries({ queryKey: ['annotations', take.id] })
   }, [analyzedAt, qc, take.id])
@@ -50,22 +58,40 @@ export function AnalysisCard({
     }
   }
 
+  const failure = failed && (
+    <div className="rounded-2xl bg-rose-whisper px-4 py-3 text-sm leading-relaxed text-ink">
+      <p className="font-semibold">The last analysis of this take failed.</p>
+      <p className="mt-0.5 break-words text-xs text-ink-soft">{take.analysis_error}</p>
+    </div>
+  )
+
   if (!take.analysis || waiting) {
     return (
-      <Card className="p-6">
-        <Header onReanalyze={reanalyze} waiting={waiting} />
-        <div className="mt-4 flex items-center gap-3 rounded-2xl bg-cream px-4 py-5">
-          <span className="animate-gentle-pulse text-xl">🎧</span>
-          <div>
-            <p className="text-sm font-semibold text-ink-soft">
-              Listening closely to this take…
-            </p>
-            <p className="mt-0.5 text-xs text-ink-faint">
-              Analysis runs in the background and usually takes under a minute. If it never
-              arrives, make sure Docker is running (<code>just analysis-build</code> once).
-            </p>
+      <Card className="space-y-4 p-6">
+        <Header onReanalyze={reanalyze} waiting={waiting} disabled={off} />
+        {failure}
+        {off && (
+          <p className="rounded-2xl bg-cream px-4 py-5 text-sm leading-relaxed text-ink-soft">
+            Analysis is off: the server didn't find an analyzer when it started. On a laptop that
+            means docker isn't running or the image isn't built (<code>just analysis-build</code>);
+            then restart the server.
+          </p>
+        )}
+        {waiting && (
+          <div className="flex items-center gap-3 rounded-2xl bg-cream px-4 py-5">
+            <span className="text-xl motion-safe:animate-gentle-pulse" aria-hidden>
+              🎧
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-ink">Listening closely to this take…</p>
+              <p className="mt-0.5 text-xs text-ink-soft">
+                {status && status.queued > 1
+                  ? `${status.queued} takes are waiting, newest first.`
+                  : 'Analysis runs in the background and usually takes a few seconds.'}
+              </p>
+            </div>
           </div>
-        </div>
+        )}
       </Card>
     )
   }
@@ -74,7 +100,7 @@ export function AnalysisCard({
   if (a.pitch.median_hz === null) {
     return (
       <Card className="p-6">
-        <Header onReanalyze={reanalyze} waiting={false} />
+        <Header onReanalyze={reanalyze} waiting={false} disabled={off} />
         <p className="mt-4 rounded-2xl bg-cream px-4 py-5 text-sm text-ink-soft">
           We couldn’t hear a voice in this one — probably a false start. Nothing to measure 💛
         </p>
@@ -84,7 +110,8 @@ export function AnalysisCard({
 
   return (
     <Card className="space-y-5 p-6">
-      <Header onReanalyze={reanalyze} waiting={false} />
+      <Header onReanalyze={reanalyze} waiting={false} disabled={off} />
+      {failure}
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-stretch">
         <MedianTile a={a} />
@@ -145,17 +172,31 @@ export function AnalysisCard({
           note={weightNote(a)}
         />
       </div>
+      <p className="text-xs text-ink-soft">
+        Measured by analyzer v{a.version}
+        {!failed && status?.enabled && a.version < status.version && status.image_version >= status.version
+          ? `; v${status.version} will measure it again soon.`
+          : '.'}
+      </p>
     </Card>
   )
 }
 
-function Header({ onReanalyze, waiting }: { onReanalyze: () => void; waiting: boolean }) {
+function Header({
+  onReanalyze,
+  waiting,
+  disabled = false,
+}: {
+  onReanalyze: () => void
+  waiting: boolean
+  disabled?: boolean
+}) {
   return (
     <div className="flex items-center justify-between">
       <h2 className="font-display text-lg font-bold text-ink">What we heard</h2>
       <button
         onClick={onReanalyze}
-        disabled={waiting}
+        disabled={waiting || disabled}
         title="Run the analysis again"
         className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold text-ink-faint transition-colors hover:bg-lavender-soft hover:text-ink disabled:opacity-40"
       >
@@ -186,7 +227,7 @@ function MedianTile({ a }: { a: Analysis }) {
       <span className="mt-2 text-center text-[11px] leading-tight text-ink-soft">
         {a.pitch.pct_in_band !== null && (
           <>
-            <strong className="text-ink">{Math.round(a.pitch.pct_in_band)}%</strong> in band
+            <strong className="text-ink">{Math.round(a.pitch.pct_in_band)}%</strong> at home
           </>
         )}
         {a.pitch.fry_pct !== null && (
@@ -208,7 +249,7 @@ const CHART_H = 132
 
 /**
  * Full-take f0 contour (250ms buckets) on the same log scale and
- * visual language as the live PitchMeter: sage band, rose trace.
+ * visual language as the live meter: sage band, rose trace.
  * Hover shows the value; clicking starts playback from that moment.
  */
 function PitchContour({
@@ -360,18 +401,18 @@ function AxisTile({
   return (
     <div className="rounded-2xl bg-cream p-4">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-xs font-bold uppercase tracking-wide text-ink-faint">
-          {emoji} {title}
+        <span className="text-sm font-semibold text-ink-soft">
+          <span aria-hidden>{emoji}</span> {title}
         </span>
       </div>
       <div className="mt-1.5 flex items-baseline gap-2">
         <span className="font-display text-2xl font-bold tabular-nums text-ink">{headline}</span>
-        <span className="text-xs text-ink-faint">{headlineHint}</span>
+        <span className="text-xs text-ink-soft">{headlineHint}</span>
       </div>
       <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-ink-soft">
         {stats.map(([k, v]) => (
           <span key={k}>
-            <span className="text-ink-faint">{k}</span> <span className="tabular-nums">{v}</span>
+            <span className="text-ink-faint">{k}</span> <span className="tabular-nums text-ink">{v}</span>
           </span>
         ))}
       </div>

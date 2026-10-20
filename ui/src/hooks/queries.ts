@@ -56,6 +56,7 @@ export function useAnnotations(id: number) {
 function invalidateRecordingData(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ['recordings'] })
   qc.invalidateQueries({ queryKey: ['heatmap'] })
+  qc.invalidateQueries({ queryKey: ['trends'] })
   qc.invalidateQueries({ queryKey: ['scripts'] })
 }
 
@@ -92,6 +93,23 @@ export function useHeatmap(opts: { from?: string; to?: string; script_id?: numbe
     queryKey: ['heatmap', opts],
     queryFn: () => api.heatmap(opts),
   })
+}
+
+export function useTrends(opts: { script_id?: number } = {}) {
+  return useQuery({ queryKey: ['trends', opts], queryFn: () => api.trends(opts) })
+}
+
+export function useAnalysisStatus() {
+  return useQuery({
+    queryKey: ['analysis-status'],
+    queryFn: api.analysisStatus,
+    // Poll while there's work, so progress moves; quietly otherwise.
+    refetchInterval: (q) => (q.state.data && q.state.data.queued + q.state.data.running > 0 ? 2000 : 30_000),
+  })
+}
+
+export function useBackupStatus() {
+  return useQuery({ queryKey: ['backup-status'], queryFn: api.backupStatus, refetchInterval: 60_000 })
 }
 
 export function useSettings() {

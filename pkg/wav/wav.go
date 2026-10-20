@@ -9,7 +9,6 @@ import (
 	"io"
 )
 
-// Info describes a PCM WAV file's audio parameters.
 type Info struct {
 	SampleRate    int
 	Channels      int

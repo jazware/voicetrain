@@ -18,9 +18,7 @@ export function MomentChips({
 
   return (
     <div>
-      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-faint">
-        Moments worth a listen
-      </p>
+      <p className="mb-2 text-sm font-semibold text-ink-soft">Moments worth a listen</p>
       <div className="flex flex-wrap gap-2">
         {moments.map((a) => {
           const meta = kindMeta(a.kind)
@@ -37,7 +35,7 @@ export function MomentChips({
                 style={{ backgroundColor: meta.color }}
               />
               {meta.label}
-              <span className="tabular-nums text-ink-faint">{clock(a.start_ms)}</span>
+              <span className="tabular-nums text-ink-soft">{clock(a.start_ms)}</span>
             </button>
           )
         })}

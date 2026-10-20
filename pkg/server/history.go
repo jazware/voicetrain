@@ -41,3 +41,20 @@ func (s *Server) handleHeatmap(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, days)
 }
+
+// handleTrends returns per-take headline metrics for the progress view.
+func (s *Server) handleTrends(c echo.Context) error {
+	var scriptID *int64
+	if v := c.QueryParam("script_id"); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid script_id")
+		}
+		scriptID = &id
+	}
+	points, err := s.store.Trends(scriptID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, points)
+}

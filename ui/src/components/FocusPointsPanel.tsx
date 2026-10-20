@@ -16,16 +16,12 @@ export function FocusPointsPanel({ focusPointIds }: { focusPointIds: string[] })
 
   return (
     <div className="space-y-2">
-      <h3 className="px-1 font-display text-sm font-semibold uppercase tracking-wider text-ink-soft">
-        While you practice
-      </h3>
+      <h2 className="px-1 font-display text-base font-semibold text-ink">While you practice</h2>
+      <div className="divide-y divide-lavender-soft overflow-hidden rounded-2xl border border-lavender-soft bg-card/80">
       {points.map((fp) => {
         const open = openId === fp.id
         return (
-          <div
-            key={fp.id}
-            className="overflow-hidden rounded-2xl border border-lavender-soft bg-card shadow-lifted"
-          >
+          <div key={fp.id}>
             <button
               onClick={() => setOpenId(open ? null : fp.id)}
               aria-expanded={open}
@@ -40,7 +36,7 @@ export function FocusPointsPanel({ focusPointIds }: { focusPointIds: string[] })
               />
             </button>
             {open && (
-              <div className="space-y-2 px-4 pb-4 animate-fade-up">
+              <div className="space-y-2 px-4 pb-4">
                 <p className="text-sm leading-relaxed text-ink-soft">{fp.summary}</p>
                 <ul className="space-y-1.5">
                   {fp.cues.map((cue, i) => (
@@ -57,6 +53,7 @@ export function FocusPointsPanel({ focusPointIds }: { focusPointIds: string[] })
           </div>
         )
       })}
+      </div>
     </div>
   )
 }

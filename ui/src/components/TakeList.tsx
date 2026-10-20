@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Heart, Play, Trash2 } from 'lucide-react'
 import type { Recording } from '@/lib/api'
+import { exerciseLine, isExercise } from '@/lib/exercises'
 import { useDeleteRecording } from '@/hooks/queries'
 import { formatDuration, formatTime } from '@/lib/format'
 
@@ -29,11 +30,17 @@ export function TakeList({ takes, showScript = false }: { takes: Recording[]; sh
               <div className="flex items-baseline gap-2">
                 <span className="text-sm font-semibold text-ink">{formatTime(take.recorded_at)}</span>
                 <span className="text-xs text-ink-faint">{formatDuration(take.duration_ms)}</span>
-                {take.analysis?.pitch.median_hz != null ? (
+                {isExercise(take.script_kind) ? (
+                  exerciseLine(take.script_kind, take.pitch_stats) && (
+                    <span className="hidden text-xs text-ink-soft sm:inline">
+                      · {exerciseLine(take.script_kind, take.pitch_stats)}
+                    </span>
+                  )
+                ) : take.analysis?.pitch.median_hz != null ? (
                   <span className="hidden text-xs text-ink-faint sm:inline">
                     · {Math.round(take.analysis.pitch.median_hz)} Hz median
                     {take.analysis.pitch.pct_in_band !== null && (
-                      <> · {Math.round(take.analysis.pitch.pct_in_band)}% in band</>
+                      <> · {Math.round(take.analysis.pitch.pct_in_band)}% at home</>
                     )}
                   </span>
                 ) : (
@@ -79,7 +86,7 @@ export function TakeList({ takes, showScript = false }: { takes: Recording[]; sh
               <button
                 onClick={() => setConfirmingId(take.id)}
                 aria-label={`Delete take from ${formatTime(take.recorded_at)}`}
-                className="rounded-full p-2 text-ink-faint opacity-0 transition-all hover:bg-rose-whisper hover:text-rose-deep focus-visible:opacity-100 group-hover:opacity-100"
+                className="rounded-full p-2 text-ink-faint opacity-0 transition-all hover:bg-rose-whisper hover:text-rose-deep focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-60"
               >
                 <Trash2 size={14} />
               </button>

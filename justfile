@@ -7,6 +7,13 @@
 run:
     go run ./cmd/voicetrain
 
+# Run the app with the analyzer native instead of in docker: identical
+# results, about 3.5x faster on Apple silicon (the arm64 image compiles
+# Praat from source, macOS gets parselmouth's wheel). Needs uv.
+run-native:
+    uv sync --frozen --project analysis --quiet
+    go run ./cmd/voicetrain --analysis-command "$PWD/analysis/.venv/bin/python $PWD/analysis/analyze.py"
+
 # Run the backend for the dev loop (pair with `just ui-dev`)
 dev:
     go run ./cmd/voicetrain --debug
@@ -30,6 +37,14 @@ build:
     echo "Building voicetrain (commit: ${GIT_COMMIT})..."
     go build -ldflags "${LDFLAGS}" -o bin/voicetrain ./cmd/voicetrain
 
+# Build the amd64 image (the static server and analyze.py on the runtime base) and push it to ghcr.io/jazware/mono/voicetrain; PUSH=0 builds only. Prints the ref (build/oci-image.sh)
+image-push tag=`git rev-parse --short=12 HEAD`:
+    build/oci-image.sh {{tag}}
+
+# Rebuild the runtime base (the Dockerfile's runtime-base stage: Python 3.12, parselmouth, numpy) and pin it in build/oci-base
+image-base:
+    build/oci-image.sh base
+
 # Build the acoustic-analysis sidecar image (uv-locked Python + Praat)
 analysis-build:
     docker build -t voicetrain-analysis analysis
@@ -47,9 +62,17 @@ analyze wav:
 backup:
     bash scripts/backup.sh
 
-# Run tests
+# Run the Go and UI tests (`analysis-test` covers the Python side)
 test:
     go test ./...
+    cd ui && pnpm install && pnpm test
+
+# Run the analyzer's ground-truth tests inside the analysis image
+analysis-test:
+    docker run --rm -v "$PWD/analysis:/src:ro" -w /src --entrypoint /app/.venv/bin/python voicetrain-analysis -m unittest discover -s tests -t .
+
+# Everything a change should pass: tests, typecheck + build, analyzer tests
+check: test ui-build analysis-test
 
 # Format code
 fmt:

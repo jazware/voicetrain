@@ -17,6 +17,7 @@ import { MomentChips } from '@/components/MomentChips'
 import { AnalysisCard } from '@/components/AnalysisCard'
 import { RatingHearts } from '@/components/RatingHearts'
 import { NotesEditor } from '@/components/NotesEditor'
+import { EXERCISES, exerciseLine, isExercise } from '@/lib/exercises'
 
 export function RecordingDetailPage() {
   const params = useParams()
@@ -78,7 +79,7 @@ export function RecordingDetailPage() {
               {' '}
               · median {Math.round(take.analysis.pitch.median_hz)} Hz
               {take.analysis.pitch.pct_in_band !== null && (
-                <> · {Math.round(take.analysis.pitch.pct_in_band)}% in band</>
+                <> · {Math.round(take.analysis.pitch.pct_in_band)}% at home</>
               )}
             </>
           ) : (
@@ -86,7 +87,7 @@ export function RecordingDetailPage() {
               <>
                 {' '}
                 · median {Math.round(take.pitch_stats.median_hz)} Hz ·{' '}
-                {Math.round(take.pitch_stats.pct_in_band * 100)}% in band
+                {Math.round(take.pitch_stats.pct_in_band * 100)}% at home
               </>
             )
           )}
@@ -95,7 +96,7 @@ export function RecordingDetailPage() {
           to={`/practice/${take.script_id}`}
           className="mt-1 inline-block text-sm font-semibold text-rose-deep hover:underline"
         >
-          Practice this passage again →
+          {isExercise(take.script_kind) ? 'Do this exercise again' : 'Practice this passage again'}
         </Link>
       </div>
 
@@ -107,6 +108,20 @@ export function RecordingDetailPage() {
         />
         <MomentChips annotations={annotations ?? []} onSeek={seekTo} />
       </Card>
+
+      {isExercise(take.script_kind) && exerciseLine(take.script_kind, take.pitch_stats) && (
+        <Card className="flex items-center gap-4 p-6">
+          <span className="text-3xl" aria-hidden>
+            {EXERCISES[take.script_kind].emoji}
+          </span>
+          <div>
+            <p className="text-sm font-semibold text-ink-soft">{EXERCISES[take.script_kind].measure}</p>
+            <p className="font-display text-xl font-semibold text-ink first-letter:uppercase">
+              {exerciseLine(take.script_kind, take.pitch_stats)}
+            </p>
+          </div>
+        </Card>
+      )}
 
       <div className="animate-fade-up" style={{ animationDelay: '120ms' }}>
         <AnalysisCard take={take} onSeek={seekTo} />

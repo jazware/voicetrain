@@ -59,21 +59,21 @@ export const kindMeta = (kind: string): EventKindMeta => EVENT_KINDS[kind] ?? FA
 export function pitchNote(a: Analysis): string {
   const { median_hz, pct_in_band, fry_pct } = a.pitch
   if (median_hz === null) return 'We couldn’t hear a voice in this one.'
-  const parts: string[] = []
+  const sentences: string[] = []
   if (median_hz >= a.target_min_hz && median_hz <= a.target_max_hz) {
-    parts.push('Your median sat right inside the target band 🌸')
+    sentences.push('Your median sat right inside your home band.')
   } else if (median_hz < a.target_min_hz) {
-    parts.push(`Median ${Math.round(a.target_min_hz - median_hz)} Hz below the band — climbing with practice`)
+    sentences.push(`Your median sat ${Math.round(a.target_min_hz - median_hz)} Hz below your home band.`)
   } else {
-    parts.push('Median floated above the band — plenty of headroom')
+    sentences.push('Your median floated above your home band, with plenty of headroom.')
   }
+  if (pct_in_band !== null && pct_in_band >= 50) sentences.push('Over half the take was at home. Lovely.')
   if (fry_pct !== null && fry_pct >= 8) {
-    parts.push('quite a bit of creak crept in; the marked dips are worth a listen')
+    sentences.push('Quite a bit of creak crept in; the marked dips are worth a listen.')
   } else if (fry_pct !== null && fry_pct >= 2) {
-    parts.push('a little fry here and there, mostly at phrase ends')
+    sentences.push('A little fry here and there, mostly at phrase ends.')
   }
-  if (pct_in_band !== null && pct_in_band >= 50) parts.push('over half the take in band — lovely!')
-  return parts.join('. ') + '.'
+  return sentences.join(' ')
 }
 
 export function melodyNote(a: Analysis): string {

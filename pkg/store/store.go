@@ -16,13 +16,10 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// Store wraps the SQLite database for all voicetrain persistence.
 type Store struct {
 	db *sql.DB
 }
 
-// Open opens (creating if needed) the SQLite database at dbPath,
-// applies pending migrations, and seeds the standard passages.
 func Open(dbPath string) (*Store, error) {
 	dsn := fmt.Sprintf("file:%s?%s", dbPath, url.Values{
 		"_pragma": []string{
@@ -64,8 +61,6 @@ func (s *Store) SnapshotTo(path string) error {
 	return err
 }
 
-// migrate applies embedded migrations with a version greater than the
-// current PRAGMA user_version, in filename order, each in a transaction.
 func (s *Store) migrate() error {
 	var current int
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&current); err != nil {
@@ -111,7 +106,6 @@ func (s *Store) migrate() error {
 	return nil
 }
 
-// migrationVersion extracts the numeric prefix from "migrations/0001_init.sql".
 func migrationVersion(name string) (int, error) {
 	base := strings.TrimPrefix(name, "migrations/")
 	prefix, _, ok := strings.Cut(base, "_")

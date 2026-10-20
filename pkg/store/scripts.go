@@ -8,10 +8,8 @@ import (
 	"time"
 )
 
-// ErrNotFound is returned when a requested row does not exist.
 var ErrNotFound = errors.New("not found")
 
-// Script is a practice passage.
 type Script struct {
 	ID          int64           `json:"id"`
 	Title       string          `json:"title"`
@@ -19,16 +17,17 @@ type Script struct {
 	Attribution string          `json:"attribution"`
 	FocusPoints json.RawMessage `json:"focus_points"`
 	IsSeeded    bool            `json:"is_seeded"`
-	CreatedAt   int64           `json:"created_at"`
-	UpdatedAt   int64           `json:"updated_at"`
-	DeletedAt   *int64          `json:"deleted_at,omitempty"`
+	// Kind is "passage" or an exercise: "siren", "sustain", "hold".
+	Kind      string `json:"kind"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+	DeletedAt *int64 `json:"deleted_at,omitempty"`
 
 	// Aggregates populated by ListScripts.
 	TakeCount        int64   `json:"take_count"`
 	LastPracticedDay *string `json:"last_practiced_day,omitempty"`
 }
 
-// ScriptParams are the user-settable fields of a script.
 type ScriptParams struct {
 	Title       *string          `json:"title"`
 	Body        *string          `json:"body"`
@@ -36,12 +35,20 @@ type ScriptParams struct {
 	FocusPoints *json.RawMessage `json:"focus_points"`
 }
 
-const scriptCols = "id, title, body, attribution, focus_points, is_seeded, created_at, updated_at, deleted_at"
+// Script kinds. Exercises are seeded; people add passages.
+const (
+	KindPassage = "passage"
+	KindSiren   = "siren"
+	KindSustain = "sustain"
+	KindHold    = "hold"
+)
+
+const scriptCols = "id, title, body, attribution, focus_points, is_seeded, kind, created_at, updated_at, deleted_at"
 
 func scanScript(row interface{ Scan(...any) error }, sc *Script) error {
 	var focusPoints string
 	if err := row.Scan(&sc.ID, &sc.Title, &sc.Body, &sc.Attribution, &focusPoints,
-		&sc.IsSeeded, &sc.CreatedAt, &sc.UpdatedAt, &sc.DeletedAt); err != nil {
+		&sc.IsSeeded, &sc.Kind, &sc.CreatedAt, &sc.UpdatedAt, &sc.DeletedAt); err != nil {
 		return err
 	}
 	sc.FocusPoints = json.RawMessage(focusPoints)
@@ -68,7 +75,7 @@ func (s *Store) ListScripts() ([]Script, error) {
 		var sc Script
 		var focusPoints string
 		if err := rows.Scan(&sc.ID, &sc.Title, &sc.Body, &sc.Attribution, &focusPoints,
-			&sc.IsSeeded, &sc.CreatedAt, &sc.UpdatedAt, &sc.DeletedAt,
+			&sc.IsSeeded, &sc.Kind, &sc.CreatedAt, &sc.UpdatedAt, &sc.DeletedAt,
 			&sc.TakeCount, &sc.LastPracticedDay); err != nil {
 			return nil, err
 		}
@@ -92,7 +99,6 @@ func (s *Store) GetScript(id int64) (*Script, error) {
 	return &sc, nil
 }
 
-// CreateScript inserts a new user script and returns it.
 func (s *Store) CreateScript(p ScriptParams) (*Script, error) {
 	title, body := "", ""
 	if p.Title != nil {
@@ -166,7 +172,6 @@ func (s *Store) UpdateScript(id int64, p ScriptParams) (*Script, error) {
 	return s.GetScript(id)
 }
 
-// DeleteScript soft-deletes a script; its recordings remain.
 func (s *Store) DeleteScript(id int64) error {
 	res, err := s.db.Exec(`UPDATE scripts SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL`,
 		time.Now().UnixMilli(), id)

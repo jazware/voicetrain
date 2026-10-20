@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// Recording is one practice take.
 type Recording struct {
 	ID         int64           `json:"id"`
 	ScriptID   int64           `json:"script_id"`
@@ -23,13 +22,17 @@ type Recording struct {
 	PitchStats json.RawMessage `json:"pitch_stats,omitempty"`
 	Analysis   json.RawMessage `json:"analysis,omitempty"`
 	AnalyzedAt *int64          `json:"analyzed_at,omitempty"`
-	RecordedAt int64           `json:"recorded_at"`
-	LocalDay   string          `json:"local_day"`
-	CreatedAt  int64           `json:"created_at"`
-	UpdatedAt  int64           `json:"updated_at"`
+	// AnalysisError is why the last analysis attempt failed, if it did.
+	AnalysisError   *string `json:"analysis_error,omitempty"`
+	AnalysisErrorAt *int64  `json:"analysis_error_at,omitempty"`
+	RecordedAt      int64   `json:"recorded_at"`
+	LocalDay        string  `json:"local_day"`
+	CreatedAt       int64   `json:"created_at"`
+	UpdatedAt       int64   `json:"updated_at"`
 
-	// ScriptTitle is joined in for list/detail views.
+	// ScriptTitle and ScriptKind are joined in for list/detail views.
 	ScriptTitle string `json:"script_title,omitempty"`
+	ScriptKind  string `json:"script_kind,omitempty"`
 }
 
 // NewRecording carries the metadata for an upload; file metadata comes
@@ -84,7 +87,6 @@ func (s *Store) CreateRecording(nr NewRecording) (int64, error) {
 	return res.LastInsertId()
 }
 
-// SetRecordingFilePath records where the WAV landed on disk.
 func (s *Store) SetRecordingFilePath(id int64, filePath string) error {
 	_, err := s.db.Exec(`UPDATE recordings SET file_path = ?, updated_at = ? WHERE id = ?`,
 		filePath, time.Now().UnixMilli(), id)
@@ -93,14 +95,14 @@ func (s *Store) SetRecordingFilePath(id int64, filePath string) error {
 
 const recordingCols = `r.id, r.script_id, r.file_path, r.duration_ms, r.sample_rate, r.channels,
 	r.size_bytes, r.rating, r.notes, r.pitch_stats, r.analysis, r.analyzed_at, r.recorded_at,
-	r.local_day, r.created_at, r.updated_at, s.title`
+	r.local_day, r.created_at, r.updated_at, s.title, s.kind, r.analysis_error, r.analysis_error_at`
 
 func scanRecording(row interface{ Scan(...any) error }) (*Recording, error) {
 	var r Recording
 	var pitchStats, analysis sql.NullString
 	if err := row.Scan(&r.ID, &r.ScriptID, &r.FilePath, &r.DurationMs, &r.SampleRate, &r.Channels,
 		&r.SizeBytes, &r.Rating, &r.Notes, &pitchStats, &analysis, &r.AnalyzedAt, &r.RecordedAt,
-		&r.LocalDay, &r.CreatedAt, &r.UpdatedAt, &r.ScriptTitle); err != nil {
+		&r.LocalDay, &r.CreatedAt, &r.UpdatedAt, &r.ScriptTitle, &r.ScriptKind, &r.AnalysisError, &r.AnalysisErrorAt); err != nil {
 		return nil, err
 	}
 	if pitchStats.Valid {
@@ -112,7 +114,6 @@ func scanRecording(row interface{ Scan(...any) error }) (*Recording, error) {
 	return &r, nil
 }
 
-// RecordingFilter narrows ListRecordings.
 type RecordingFilter struct {
 	ScriptID *int64
 	LocalDay *string
@@ -120,7 +121,6 @@ type RecordingFilter struct {
 	Offset   int
 }
 
-// ListRecordings returns takes newest-first with their script titles.
 func (s *Store) ListRecordings(f RecordingFilter) ([]Recording, error) {
 	query := `SELECT ` + recordingCols + ` FROM recordings r JOIN scripts s ON s.id = r.script_id WHERE 1=1`
 	args := []any{}
@@ -156,7 +156,6 @@ func (s *Store) ListRecordings(f RecordingFilter) ([]Recording, error) {
 	return recordings, rows.Err()
 }
 
-// GetRecording returns one take by id.
 func (s *Store) GetRecording(id int64) (*Recording, error) {
 	r, err := scanRecording(s.db.QueryRow(
 		`SELECT `+recordingCols+` FROM recordings r JOIN scripts s ON s.id = r.script_id WHERE r.id = ?`, id))
@@ -230,7 +229,25 @@ func (s *Store) SetRecordingAnalysis(id int64, analysis json.RawMessage, events 
 	defer tx.Rollback()
 
 	now := time.Now().UnixMilli()
-	res, err := tx.Exec(`UPDATE recordings SET analysis = ?, analyzed_at = ?, updated_at = ? WHERE id = ?`,
+	// Keep the document being replaced. Same-version re-runs replace in
+	// place (a "re-listen" of a take), so history holds one document per
+	// analyzer version: what each algorithm said.
+	if _, err := tx.Exec(`
+		INSERT INTO analysis_history (recording_id, version, analysis, analyzed_at, replaced_at)
+		SELECT id, CAST(COALESCE(json_extract(analysis, '$.version'), 0) AS INTEGER), analysis, analyzed_at, ?
+		FROM recordings
+		WHERE id = ? AND analysis IS NOT NULL
+		  AND CAST(COALESCE(json_extract(analysis, '$.version'), 0) AS INTEGER)
+		      != CAST(COALESCE(json_extract(?, '$.version'), 0) AS INTEGER)
+		  AND NOT EXISTS (
+		      SELECT 1 FROM analysis_history h
+		      WHERE h.recording_id = recordings.id
+		        AND h.version = CAST(COALESCE(json_extract(recordings.analysis, '$.version'), 0) AS INTEGER))`,
+		now, id, string(analysis)); err != nil {
+		return err
+	}
+	res, err := tx.Exec(`UPDATE recordings SET analysis = ?, analyzed_at = ?, updated_at = ?,
+		analysis_error = NULL, analysis_error_at = NULL WHERE id = ?`,
 		string(analysis), now, now, id)
 	if err != nil {
 		return err
@@ -262,6 +279,45 @@ func (s *Store) SetRecordingAnalysis(id int64, analysis json.RawMessage, events 
 	return tx.Commit()
 }
 
+// SetRecordingAnalysisError records why analysing a take failed. The
+// take keeps any earlier analysis.
+func (s *Store) SetRecordingAnalysisError(id int64, msg string) error {
+	res, err := s.db.Exec(`UPDATE recordings SET analysis_error = ?, analysis_error_at = ? WHERE id = ?`,
+		msg, time.Now().UnixMilli(), id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) ListRecordingIDsWithAnalysisErrors() ([]int64, error) {
+	rows, err := s.db.Query(`SELECT id FROM recordings WHERE analysis_error IS NOT NULL AND file_path != '' ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (s *Store) CountAnalysisErrors() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM recordings WHERE analysis_error IS NOT NULL`).Scan(&n)
+	return n, err
+}
+
 // ListRecordingIDsNeedingAnalysis returns takes with a stored file but
 // no analysis (or one from an older analyzer version), oldest first.
 func (s *Store) ListRecordingIDsNeedingAnalysis(currentVersion int) ([]int64, error) {
@@ -287,14 +343,12 @@ func (s *Store) ListRecordingIDsNeedingAnalysis(currentVersion int) ([]int64, er
 	return ids, rows.Err()
 }
 
-// HeatmapDay is one day's practice aggregate.
 type HeatmapDay struct {
 	Day             string `json:"day"`
 	Count           int64  `json:"count"`
 	TotalDurationMs int64  `json:"total_duration_ms"`
 }
 
-// Heatmap aggregates practice per local day, optionally for one script.
 func (s *Store) Heatmap(from, to string, scriptID *int64) ([]HeatmapDay, error) {
 	query := `SELECT local_day, COUNT(*), COALESCE(SUM(duration_ms), 0)
 		FROM recordings WHERE local_day >= ? AND local_day <= ?`
@@ -322,7 +376,6 @@ func (s *Store) Heatmap(from, to string, scriptID *int64) ([]HeatmapDay, error) 
 	return days, rows.Err()
 }
 
-// ListAnnotations returns time-anchored annotations for a recording.
 // Nothing writes annotations yet; this locks the read contract for the
 // future automated-analysis feature.
 func (s *Store) ListAnnotations(recordingID int64) ([]Annotation, error) {
@@ -348,8 +401,6 @@ func (s *Store) ListAnnotations(recordingID int64) ([]Annotation, error) {
 	return annotations, rows.Err()
 }
 
-// Annotation is a time-anchored note on a recording (future: produced
-// by automated analysis).
 type Annotation struct {
 	ID          int64           `json:"id"`
 	RecordingID int64           `json:"recording_id"`
@@ -359,4 +410,93 @@ type Annotation struct {
 	Payload     json.RawMessage `json:"payload"`
 	Source      string          `json:"source"`
 	CreatedAt   int64           `json:"created_at"`
+}
+
+type ArchivedAnalysis struct {
+	Version    int             `json:"version"`
+	Analysis   json.RawMessage `json:"analysis"`
+	AnalyzedAt *int64          `json:"analyzed_at,omitempty"`
+	ReplacedAt int64           `json:"replaced_at"`
+}
+
+func (s *Store) ListAnalysisHistory(recordingID int64) ([]ArchivedAnalysis, error) {
+	rows, err := s.db.Query(`
+		SELECT version, analysis, analyzed_at, replaced_at FROM analysis_history
+		WHERE recording_id = ? ORDER BY version, id`, recordingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ArchivedAnalysis{}
+	for rows.Next() {
+		var a ArchivedAnalysis
+		var doc string
+		if err := rows.Scan(&a.Version, &doc, &a.AnalyzedAt, &a.ReplacedAt); err != nil {
+			return nil, err
+		}
+		a.Analysis = json.RawMessage(doc)
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+type TrendPoint struct {
+	ID           int64    `json:"id"`
+	ScriptID     int64    `json:"script_id"`
+	RecordedAt   int64    `json:"recorded_at"`
+	LocalDay     string   `json:"local_day"`
+	DurationMs   int64    `json:"duration_ms"`
+	MedianHz     *float64 `json:"median_hz"`
+	PctInBand    *float64 `json:"pct_in_band"`
+	FryPct       *float64 `json:"fry_pct"`
+	VtlCm        *float64 `json:"vtl_cm"`
+	SemitoneSD   *float64 `json:"semitone_sd"`
+	LiveMedianHz *float64 `json:"live_median_hz"`
+	// Kind is the script's kind, so passage and exercise trends stay apart.
+	Kind string `json:"kind"`
+	// Exercise measures, from the live tracker (pitch_stats).
+	RangeSt   *float64 `json:"range_st"`
+	HoldS     *float64 `json:"hold_s"`
+	HoldCents *float64 `json:"hold_cents"`
+	StreakS   *float64 `json:"streak_s"`
+}
+
+// Trends returns every take's headline numbers, oldest first, pulled
+// out of the analysis documents so the client never downloads contours.
+func (s *Store) Trends(scriptID *int64) ([]TrendPoint, error) {
+	query := `SELECT r.id, r.script_id, r.recorded_at, r.local_day, r.duration_ms,
+			json_extract(r.analysis, '$.pitch.median_hz'),
+			json_extract(r.analysis, '$.pitch.pct_in_band'),
+			json_extract(r.analysis, '$.pitch.fry_pct'),
+			json_extract(r.analysis, '$.resonance.estimated_vtl_cm'),
+			json_extract(r.analysis, '$.melody.semitone_sd'),
+			json_extract(r.pitch_stats, '$.median_hz'),
+			s.kind,
+			json_extract(r.pitch_stats, '$.range_st'),
+			json_extract(r.pitch_stats, '$.longest_hold_s'),
+			json_extract(r.pitch_stats, '$.hold_sd_cents'),
+			json_extract(r.pitch_stats, '$.longest_in_band_s')
+		FROM recordings r JOIN scripts s ON s.id = r.script_id`
+	args := []any{}
+	if scriptID != nil {
+		query += ` WHERE r.script_id = ?`
+		args = append(args, *scriptID)
+	}
+	query += ` ORDER BY r.recorded_at, r.id`
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []TrendPoint{}
+	for rows.Next() {
+		var p TrendPoint
+		if err := rows.Scan(&p.ID, &p.ScriptID, &p.RecordedAt, &p.LocalDay, &p.DurationMs,
+			&p.MedianHz, &p.PctInBand, &p.FryPct, &p.VtlCm, &p.SemitoneSD, &p.LiveMedianHz,
+			&p.Kind, &p.RangeSt, &p.HoldS, &p.HoldCents, &p.StreakS); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
